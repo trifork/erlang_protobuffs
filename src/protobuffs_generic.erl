@@ -6,7 +6,7 @@
 
 -export([proto_file_to_spec/1, proto_text_to_spec/1]).
 -export([msg_spec_for/2]).
--export([decode/2]).
+-export([decode/2, decode/3]).
 
 %%%==================== Type definitions ==============================
 
@@ -84,8 +84,8 @@ to_field_type_spec({Tag, Kind, Type, Name, Default}, MsgNameTable) ->
 %%%==================== Helpers:
 
 %%@hidden
-index_of_name(Name, NameList) ->
-    index_of_name(Name, NameList, 1).
+index_of_name(Name, NameTable) ->
+    index_of_name(Name, NameTable, 1).
 
 %%@hidden
 index_of_name(Name, Table, N) ->
@@ -97,42 +97,68 @@ index_of_name(Name, Table, N) ->
 	    index_of_name(Name, Table, N+1)
     end.
 
+%%@hidden
+index_of_name_in_list(Name, NameList) ->
+    index_of_name_in_list(Name, NameList, 1).
+
+%%@hidden
+index_of_name_in_list(Name, NameList, N) ->
+    case NameList of
+	[] ->
+	    error({message_type_not_found, Name});
+	[Name|_] ->
+	    N;
+	[_|Rest] ->
+	    index_of_name_in_list(Name, Rest, N+1)
+    end.
+
 -ifdef(TEST).
 index_of_name_test() ->
     1 = index_of_name(foo, {foo}),
     1 = index_of_name(foo, {foo,bar,baz,quux}),
     3 = index_of_name(baz, {foo,bar,baz,quux}),
     4 = index_of_name(quux,{foo,bar,baz,quux}).
+
+index_of_name_in_list_test() ->
+    1 = index_of_name(foo, [foo]),
+    1 = index_of_name(foo, [foo,bar,baz,quux]),
+    3 = index_of_name(baz, [foo,bar,baz,quux]),
+    4 = index_of_name(quux,[foo,bar,baz,quux]).
 -endif.
     
 %%%==================== Decoding ========================================
 
-decode(_MsgSpec={PBSpec,MsgIndex}, Bin) ->
+decode(MsgSpec, Bin) ->
+    decode(MsgSpec, Bin, fun(_) -> undefined end).
+				  
+decode(_MsgSpec={PBSpec,MsgIndex}, Bin, RecordInfoFun) ->
     MsgSpec = element(MsgIndex,PBSpec#pbspec.msg_type_table),
-    decode_msg(PBSpec, MsgSpec, Bin, []).
+    decode_msg(PBSpec, MsgSpec, Bin, [], RecordInfoFun).
 
 %%====
-decode_msg(_PBSpec, _MsgSpec, <<>>, Acc) ->
+decode_msg(_PBSpec, _MsgTypeSpec={MsgName,_}, <<>>, Acc, RecordInfoFun) ->
     %% TODO: Verify that required fields are present.
     %% TODO: Collect repeated fields.
-    Acc;
-decode_msg(PBSpec, MsgSpec={MsgName,FieldsSpec}, Bin, Acc) ->
+    to_record(RecordInfoFun(MsgName), Acc);
+decode_msg(PBSpec, MsgTypeSpec={MsgName,FieldsSpec}, Bin, Acc, RecordInfoFun) ->
     {ok, Tag} = protobuffs:next_field_num(Bin),
     case lists:keyfind(Tag, #field_type_spec.tag, FieldsSpec) of
 	FieldSpec=#field_type_spec{} ->
-	    {FieldValue,RestBin} = decode_field(PBSpec, FieldSpec, Bin),
-	    decode_msg(PBSpec, MsgSpec, RestBin, [FieldValue|Acc]);
+	    {FieldValue,RestBin} = decode_field(PBSpec, FieldSpec, Bin, RecordInfoFun),
+	    decode_msg(PBSpec, MsgTypeSpec, RestBin, [FieldValue|Acc],
+		       RecordInfoFun);
 	false ->
 	    error({unexpected_tag, Tag, MsgName})
     end.
 
 decode_field(PBSpec, #field_type_spec{tag=Tag, name=Name, type=Type, kind=Kind},
-	     Bin) ->
+	     Bin,
+	     RecordInfoFun) ->
     case Type of
 	{struct, Index} ->
-	    SubSpec = element(Index, #pbspec.msg_type_table),
+	    SubSpec = element(Index, PBSpec#pbspec.msg_type_table),
 	    {{Tag, SubBytes}, Rest} = protobuffs:decode(Bin, bytes),
-	    Value = decode_msg(PBSpec, SubSpec, SubBytes, []);
+	    Value = decode_msg(PBSpec, SubSpec, SubBytes, [], RecordInfoFun);
 	_ when is_atom(Type) -> % Primitive type
 	    case Kind of
 		repeated_packed ->
@@ -141,4 +167,38 @@ decode_field(PBSpec, #field_type_spec{tag=Tag, name=Name, type=Type, kind=Kind},
 		    {{Tag, Value}, Rest} = protobuffs:decode(Bin, Type)
 	    end
     end,
-    {{Tag, Name, Value}, Rest}.
+    if Kind=:=repeated;
+       Kind=:=repeated_packed ->
+	    {{Tag, Name, Value, repeated}, Rest};
+       true ->
+	    {{Tag, Name, Value}, Rest}
+    end.
+
+to_record(RecordInfo, FieldList) ->
+    case RecordInfo of
+	undefined ->
+	    FieldList;
+	{RecordName, RecordFields} ->
+	    RecordLen = length(RecordFields) + 1,
+	    Record0 = setelement(1, erlang:make_tuple(RecordLen, undefined), RecordName),
+	    lists:foldl(fun(F,R)-> add_record_field(F,R,RecordFields) end,
+			Record0,
+			FieldList)
+    end.
+
+add_record_field(Field, Record, RecordFields) ->
+    io:format("add_record_field ~p\n", [{Record, Field, RecordFields}]),
+    Name = element(2, Field),
+    Index = 1 + index_of_name_in_list(Name, RecordFields),
+    NewValue =
+	case Field of
+	    {_Tag,_Name,Value} ->
+		Value;
+	    {_Tag,_Name,Value, repeated} ->
+		OldList = case element(Index,Record) of
+			      undefined -> [];
+			      L -> L
+			  end,
+		[Value|OldList]
+	end,
+    setelement(Index, Record, NewValue).
