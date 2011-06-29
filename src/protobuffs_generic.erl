@@ -129,17 +129,17 @@ index_of_name_in_list_test() ->
 %%%==================== Decoding ========================================
 
 decode(MsgSpec, Bin) ->
-    decode(MsgSpec, Bin, fun(_) -> undefined end).
+    decode(MsgSpec, Bin, fun(_) -> default end).
 				  
 decode(_MsgSpec={PBSpec,MsgIndex}, Bin, RecordInfoFun) ->
     MsgSpec = element(MsgIndex,PBSpec#pbspec.msg_type_table),
     decode_msg(PBSpec, MsgSpec, Bin, [], RecordInfoFun).
 
 %%====
-decode_msg(_PBSpec, _MsgTypeSpec={MsgName,_}, <<>>, Acc, RecordInfoFun) ->
+decode_msg(PBSpec, _MsgTypeSpec={MsgName,_}, <<>>, Acc, RecordInfoFun) ->
     %% TODO: Verify that required fields are present.
     %% TODO: Collect repeated fields.
-    to_record(RecordInfoFun(MsgName), Acc);
+    to_record(get_record_info(RecordInfoFun, MsgName, PBSpec), Acc);
 decode_msg(PBSpec, MsgTypeSpec={MsgName,FieldsSpec}, Bin, Acc, RecordInfoFun) ->
     {ok, Tag} = protobuffs:next_field_num(Bin),
     case lists:keyfind(Tag, #field_type_spec.tag, FieldsSpec) of
@@ -174,9 +174,31 @@ decode_field(PBSpec, #field_type_spec{tag=Tag, name=Name, type=Type, kind=Kind},
 	    {{Tag, Name, Value}, Rest}
     end.
 
+get_record_info(RecordInfoFun, MsgName, PBSpec) ->
+    case RecordInfoFun(MsgName) of
+	default ->
+	    default_record_info(MsgName, PBSpec);
+        field_list ->
+	    field_list;
+	RecordInfo={_,_} ->
+	    RecordInfo
+    end.
+
+default_record_info(MsgName, PBSpec) ->
+    Index = index_of_name(MsgName, PBSpec#pbspec.msg_name_table),
+    {_,FieldsSpec} = element(Index,PBSpec#pbspec.msg_type_table),
+    RecordName = atomize(atom_to_list(MsgName)),
+    RecordFields = [atomize(atom_to_list(N)) || #field_type_spec{name=N} <- FieldsSpec],
+    {RecordName, RecordFields}.
+    
+%% @hidden
+atomize(String) ->
+    list_to_atom(string:to_lower(String)).
+
+    
 to_record(RecordInfo, FieldList) ->
     case RecordInfo of
-	undefined ->
+	field_list ->
 	    FieldList;
 	{RecordName, RecordFields} ->
 	    RecordLen = length(RecordFields) + 1,
