@@ -137,8 +137,6 @@ decode(_MsgSpec={PBSpec,MsgIndex}, Bin, RecordInfoFun) ->
 
 %%====
 decode_msg(PBSpec, _MsgTypeSpec={MsgName,_}, <<>>, Acc, RecordInfoFun) ->
-    %% TODO: Verify that required fields are present.
-    %% TODO: Collect repeated fields.
     to_record(get_record_info(RecordInfoFun, MsgName, PBSpec), Acc);
 decode_msg(PBSpec, MsgTypeSpec={MsgName,FieldsSpec}, Bin, Acc, RecordInfoFun) ->
     {ok, Tag} = protobuffs:next_field_num(Bin),
@@ -197,6 +195,8 @@ atomize(String) ->
 
     
 to_record(RecordInfo, FieldList) ->
+    %% TODO: Verify that required fields are present?
+    %% TODO: Handle field defaults & empty 'repeated' fields.
     case RecordInfo of
 	field_list ->
 	    FieldList;
