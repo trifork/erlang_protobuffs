@@ -5,6 +5,7 @@
 %%% protobuf format specification.
 
 -export([proto_file_to_spec/1, proto_text_to_spec/1]).
+-export([msg_spec_for/2]).
 -export([decode/2]).
 
 %%%==================== Type definitions ==============================
@@ -28,7 +29,12 @@
 
 -type(msg_type_spec() :: {msg_name(), [field_type_spec()]}).
 -type(field_type_spec() :: #field_type_spec{}).
--type(pbspec() :: tuple(msg_type_spec())). % Of msg_type_spec().
+
+-record(pbspec, {
+	  msg_name_table :: tuple(atom()),
+	  msg_type_table :: tuple(msg_type_spec())
+	 }).
+-type(pbspec() :: #pbspec{}). % Of msg_type_spec().
 -type(msgspec() :: {pbspec(), msg_nr()}).
 
 %%%==================== Parsing and translation =========================
@@ -45,14 +51,19 @@ parsed_to_pbspec(Parsed) ->
     Checked = protobuffs_compile:resolve(Parsed),
     to_pbspec(Checked).
 
+-spec(msg_spec_for/2 :: (pbspec(), msg_name()) -> msgspec()).
+msg_spec_for(PBSpec, MsgName) ->
+    Index = index_of_name(MsgName, PBSpec#pbspec.msg_name_table),
+    {PBSpec, Index}.
+
 %%%==================== Translation:
 
 %%@hidden
 to_pbspec(Resolved) ->
-    MsgNameTable = [list_to_atom(N) || {N,_} <- Resolved],
-    MsgTypeSpecs = [to_msg_type_spec(Msg, MsgNameTable) || Msg <- Resolved],
-    MsgNameTuple = list_to_tuple(MsgNameTable),
-    {MsgTypeSpecs, MsgNameTuple}.
+    MsgNameTable = list_to_tuple([list_to_atom(N) || {N,_} <- Resolved]),
+    MsgTypeSpecs = list_to_tuple([to_msg_type_spec(Msg, MsgNameTable) || Msg <- Resolved]),
+    #pbspec{msg_name_table=MsgNameTable,
+	    msg_type_table=MsgTypeSpecs}.
 
 to_msg_type_spec({MsgNameStr, Fields}, MsgNameTable) ->
     {list_to_atom(MsgNameStr),
@@ -77,39 +88,57 @@ index_of_name(Name, NameList) ->
     index_of_name(Name, NameList, 1).
 
 %%@hidden
-index_of_name(Name, [], _) -> error({message_type_not_found, Name});
-index_of_name(Name, [Name|_], N) -> N;
-index_of_name(Name, [_|Rest], N) -> index_of_name(Name, Rest, N+1).
-
+index_of_name(Name, Table, N) ->
+    if N > tuple_size(Table) ->
+	    error({message_type_not_found, Name});
+       Name == element(N,Table) ->
+	    N;
+       true ->
+	    index_of_name(Name, Table, N+1)
+    end.
 
 -ifdef(TEST).
 index_of_name_test() ->
-    1 = index_of_name(foo, [foo]),
-    1 = index_of_name(foo, [foo,bar,baz,quux]),
-    3 = index_of_name(baz, [foo,bar,baz,quux]),
-    4 = index_of_name(quux,[foo,bar,baz,quux]).
+    1 = index_of_name(foo, {foo}),
+    1 = index_of_name(foo, {foo,bar,baz,quux}),
+    3 = index_of_name(baz, {foo,bar,baz,quux}),
+    4 = index_of_name(quux,{foo,bar,baz,quux}).
 -endif.
     
 %%%==================== Decoding ========================================
 
 decode(_MsgSpec={PBSpec,MsgIndex}, Bin) ->
-    MsgSpec = element(MsgIndex,PBSpec),
+    MsgSpec = element(MsgIndex,PBSpec#pbspec.msg_type_table),
     decode_msg(PBSpec, MsgSpec, Bin, []).
 
 %%====
 decode_msg(_PBSpec, _MsgSpec, <<>>, Acc) ->
     %% TODO: Verify that required fields are present.
+    %% TODO: Collect repeated fields.
     Acc;
 decode_msg(PBSpec, MsgSpec={MsgName,FieldsSpec}, Bin, Acc) ->
     {ok, Tag} = protobuffs:next_field_num(Bin),
     case lists:keyfind(Tag, #field_type_spec.tag, FieldsSpec) of
 	FieldSpec=#field_type_spec{} ->
-	    {FieldValue,RestBin} = decode_field(FieldSpec, Bin),
+	    {FieldValue,RestBin} = decode_field(PBSpec, FieldSpec, Bin),
 	    decode_msg(PBSpec, MsgSpec, RestBin, [FieldValue|Acc]);
 	false ->
 	    error({unexpected_tag, Tag, MsgName})
     end.
 
-decode_field(_FieldSpec, _Bin) ->
-    'TODO'.
-
+decode_field(PBSpec, #field_type_spec{tag=Tag, name=Name, type=Type, kind=Kind},
+	     Bin) ->
+    case Type of
+	{struct, Index} ->
+	    SubSpec = element(Index, #pbspec.msg_type_table),
+	    {{Tag, SubBytes}, Rest} = protobuffs:decode(Bin, bytes),
+	    Value = decode_msg(PBSpec, SubSpec, SubBytes, []);
+	_ when is_atom(Type) -> % Primitive type
+	    case Kind of
+		repeated_packed ->
+		    {{Tag, Value}, Rest} = protobuffs:decode_packed(Bin, Type);
+		_ ->
+		    {{Tag, Value}, Rest} = protobuffs:decode(Bin, Type)
+	    end
+    end,
+    {{Tag, Name, Value}, Rest}.
