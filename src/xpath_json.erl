@@ -7,7 +7,8 @@
 
 -record(node, {root     :: #node{} | self,
 	       parent   :: #node{},
-	       value    :: { term(), term() },
+	       name     :: term(),
+	       value    :: term(),
 	       position :: integer(),
 	       last     :: integer() }).
 
@@ -16,7 +17,7 @@
 %% select the objects matching the expression.
 %%
 select(XPathExpr, JSON) ->
-    Results = eval(XPathExpr, #node{ root=self, value={root,JSON} }),
+    Results = eval(XPathExpr, #node{ root=self, name=root, value=JSON }),
     [ value_of(Result) || Result <- Results ].
 
 
@@ -60,7 +61,7 @@ eval({bool, OP, Exp1, Exp2}, Node) ->
 			  _ ->
 			      false
 		      end,
-		  [#node{value={bool,Bool}}|Acc]
+		  [{bool,Bool}|Acc]
 	  end,
 	  [],
 	  M1, M2);
@@ -136,7 +137,7 @@ eval_nodetest({name, {AName,[],SName}}, Node) ->
     Name = node_name(Node),
     Name =:= AName
 	orelse Name =:= SName
-	orelse atom_to_binary(AName, latin1) =:= Name;
+	orelse atom_to_binary(AName, utf8) =:= Name;
 
 eval_nodetest({node_type, T}, Node) ->
     type_of(Node) =:= T;
@@ -190,10 +191,11 @@ fold_step(Fun, Acc, {Axis, NodeTest, PredicateList}, Node ) ->
 fold_axis(attribute, Fun, Acc, Node) ->
     fold_axis(child, Fun, Acc, Node);
 				
-fold_axis(child, Fun, Acc, Node=#node{ value={_, {struct, Members}}}) ->
+fold_axis(child, Fun, Acc, Node=#node{ value={struct, Members}}) ->
     %Last = length(Members),
-    {Acc2,_} = lists:foldl(fun(Member, {Acc0, Idx}) ->
-				   Acc1 = Fun(#node{ value=Member, 
+    {Acc2,_} = lists:foldl(fun({Name,Value}=Member, {Acc0, Idx}) ->
+				   Acc1 = Fun(#node{ name=Name,
+						     value=Value, 
 						     parent=Node, 
 						     root=root(Node)
 						  }, Acc0),
@@ -203,10 +205,11 @@ fold_axis(child, Fun, Acc, Node=#node{ value={_, {struct, Members}}}) ->
 			   Members),
     Acc2;
 
-fold_axis(child, Fun, Acc, Node=#node{ value={Name, Members}}) when is_list(Members) ->
+fold_axis(child, Fun, Acc, Node=#node{ name=Name, value=Members}) when is_list(Members) ->
     Last = length(Members),
     {Acc2,_} = lists:foldl(fun(Member, {Acc0, Idx}) ->
-				   Acc1 = Fun(#node{ value={Name, Member}, 
+				   Acc1 = Fun(#node{ name=Name,
+						     value=Member, 
 						     parent=Node,
 						     position=Idx, 
 						     last=Last, 
@@ -218,7 +221,7 @@ fold_axis(child, Fun, Acc, Node=#node{ value={Name, Members}}) when is_list(Memb
 			   Members),
    Acc2;
 
-fold_axis(child, _, Acc, #node{ value={_, Value}}) when not is_list(Value)->
+fold_axis(child, _, Acc, #node{ value=Value}) when not is_list(Value)->
     Acc;
 
 fold_axis(descendant, Fun, Acc, Node) ->
@@ -256,12 +259,12 @@ type_of(T) when is_tuple(T) ->
 type_of(_) ->
     undefined.
 
-node_name(#node{value={Name,_Value}}) ->
+node_name(#node{name=Name}) ->
     Name;
 node_name(_) ->
     undefined.
 
-value_of(#node{value={_Name,Value}}) ->
+value_of(#node{value=Value}) ->
     Value;
 value_of({number, N}) ->
     N;
@@ -287,7 +290,7 @@ test() ->
     In = mochijson2:decode(" { \"a\": [\"zero\",\"one\",2], \"b\": { \"j\":7, \"l\":true, \"k\": { \"foo\": 3, \"t\" : {\"vals\":[ 45,6,7 ], \"j\":4} }  }} "),
     io:format("~s~n", [mochijson2:encode(In)]),
 
-    {ok, Expr} = xmerl_xpath_parse:parse(xmerl_xpath_scan:tokens("//k[//j > foo and foo = 3]/t")),
+    {ok, Expr} = xmerl_xpath_parse:parse(xmerl_xpath_scan:tokens("//vals[. = 6]")),
     Out = select(Expr, In),
     
     io:format("~s~n", [mochijson2:encode(Out)]).
