@@ -2,8 +2,9 @@
 
 -export([select/2]).
 
--define(TEST,true).
+-ifdef(TEST).
 -export([test/0]).
+-endif.
 
 -record(node, {root     :: #node{} | self,
 	       parent   :: #node{},
@@ -193,7 +194,7 @@ fold_axis(attribute, Fun, Acc, Node) ->
 				
 fold_axis(child, Fun, Acc, Node=#node{ value={struct, Members}}) ->
     %Last = length(Members),
-    {Acc2,_} = lists:foldl(fun({Name,Value}=Member, {Acc0, Idx}) ->
+    {Acc2,_} = lists:foldl(fun({Name,Value}, {Acc0, Idx}) ->
 				   Acc1 = Fun(#node{ name=Name,
 						     value=Value, 
 						     parent=Node, 
