@@ -33,7 +33,7 @@ empty_test() ->
 
 
 default_test() ->
-    DataGen = fun() -> {withdefault,default(undefined, real()),
+    DataGen = fun() -> {requiredwithdefault,default(undefined, real()),
 			default(undefined, real()),
 			default(undefined, sint32()),
 			default(undefined, sint64()),
@@ -49,7 +49,7 @@ default_test() ->
 			default(undefined, string())}
 	      end,
     compile_pb("hasdefault.proto"),
-    check_decode_loop(hasdefault_pb, "hasdefault.proto", 'WithDefault', DataGen, 100).
+    check_decode_loop(hasdefault_pb, "hasdefault.proto", 'RequiredWithDefault', DataGen, 100).
     
 %%====================
 compile_pb(ProtoFile) ->
@@ -67,8 +67,6 @@ check_decode(Module, ProtoFile, MsgName, Record) ->
     Encoded = Module:encode(Record),
     DecodedA = Module:decode(MsgNameLower, Encoded),
     DecodedB = generic_decode_message(Encoded, ProtoFile, MsgName),
-    io:format(user, "DB| DecodedA=~p\n", [DecodedA]),
-    io:format(user, "DB| DecodedB=~p\n", [DecodedB]),
     ?assertEqual({a,DecodedA}, {a,DecodedB}).
      
     
