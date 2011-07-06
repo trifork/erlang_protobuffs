@@ -209,7 +209,6 @@ to_record(RecordInfo, FieldList) ->
     end.
 
 add_record_field(Field, Record, RecordFields) ->
-    io:format("add_record_field ~p\n", [{Record, Field, RecordFields}]),
     Name = element(2, Field),
     Index = 1 + index_of_name_in_list(Name, RecordFields),
     NewValue =
